@@ -286,12 +286,19 @@ def main():
     edge_good = True
     last_edge_check = time.time()
     last_day = dt.date.today()
+    last_algo = True
     while True:
         try:
             if dt.date.today() != last_day:
                 write_daily_summary(cfg, si)
                 last_day = dt.date.today()
             si = mt5.symbol_info(cfg["symbol"]) or si
+            term = mt5.terminal_info()
+            algo_ok = bool(term and term.trade_allowed)
+            if algo_ok != last_algo:
+                out("ALGO TRADING " + ("ENABLED" if algo_ok else
+                    "DISABLED — press the Algo Trading button in MT5; no orders will be sent"))
+                last_algo = algo_ok
             spread_ok = si.spread <= cfg["max_spread_points"]
             cs = candles(cfg["symbol"], cfg["timeframe"], int(cfg["bars_to_fetch"]))
             atrs = [x for x in strategy.atr(cs) if x]
@@ -306,10 +313,10 @@ def main():
             if cs[-1]["t"] != last_bar:
                 last_bar = cs[-1]["t"]
                 sig = strategy.signal(cs, cfg["strategy"], si.spread * si.point)
-                if sig and spread_ok and ratio_ok and edge_good and not daily_limits(cfg, si):
+                if sig and spread_ok and ratio_ok and edge_good and algo_ok and not daily_limits(cfg, si):
                     open_position(cfg, si, sig, dry)
                 elif sig:
-                    out("SIGNAL skipped (filter/edge/limit): " + sig["side"])
+                    out("SIGNAL skipped (filter/edge/limit/algo): " + sig["side"])
         except Exception as exc:
             out("LOOP ERROR: %s — reconnecting in 10s" % exc)
             try:

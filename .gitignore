@@ -3,3 +3,4 @@ web_token.txt
 market.json
 __pycache__/
 *.pyc
+bot/trades.csv

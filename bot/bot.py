@@ -19,6 +19,7 @@ import strategy
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 LOG_PATH = os.path.join(ROOT, "trades.csv")
+SUMMARY_PATH = os.path.join(ROOT, "daily_summary.csv")
 TF = {"M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5,
       "M15": mt5.TIMEFRAME_M15, "H1": mt5.TIMEFRAME_H1}
 TF_SEC = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
@@ -189,24 +190,62 @@ def manage_positions(cfg, si, cs, dry):
                 out("BREAK EVEN ticket=%s result=%s" % (p.ticket, r.comment if r else "-"))
 
 
-def daily_limits(cfg, si):
-    acc = mt5.account_info()
-    today = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    deals = mt5.history_deals_get(today, dt.datetime.now() + dt.timedelta(minutes=5)) or []
+def day_state(cfg, si, day=None):
+    """Trades, PnL and consecutive losing exits for a given UTC day."""
+    day = day or dt.date.today()
+    start = dt.datetime.combine(day, dt.time.min)
+    end = start + dt.timedelta(days=1)
+    deals = mt5.history_deals_get(start, end) or []
     mine = [d for d in deals if d.symbol == si.name and d.magic == cfg["magic"]]
     entries = [d for d in mine if d.entry == mt5.DEAL_ENTRY_IN]
+    exits = sorted([d for d in mine if d.entry == mt5.DEAL_ENTRY_OUT],
+                   key=lambda d: d.time, reverse=True)
     pnl = sum(d.profit + d.swap + d.commission for d in mine)
+    consec = 0
+    for d in exits:
+        if (d.profit + d.swap + d.commission) < 0:
+            consec += 1
+        else:
+            break
+    return {"date": str(day), "trades": len(entries), "pnl": round(pnl, 2),
+            "consec_losses": consec, "wins": sum(1 for d in exits if d.profit > 0),
+            "losses": sum(1 for d in exits if d.profit <= 0)}
+
+
+def daily_limits(cfg, si):
+    acc = mt5.account_info()
+    st = day_state(cfg, si)
     risk_money = acc.balance * cfg["risk_pct"] / 100.0
-    limited = len(entries) >= cfg["max_trades_per_day"] or pnl <= -cfg["daily_loss_limit_r"] * risk_money
+    limited = (st["trades"] >= cfg["max_trades_per_day"] or
+               st["pnl"] <= -cfg["daily_loss_limit_r"] * risk_money or
+               st["consec_losses"] >= cfg.get("max_consecutive_losses", 3))
     if limited:
-        out("DAILY LIMIT hit: trades=%d pnl=%.2f — no new entries today" % (len(entries), pnl))
+        out("DAILY LIMIT: trades=%d pnl=%.2f consec_loss=%d — no new entries today" %
+            (st["trades"], st["pnl"], st["consec_losses"]))
     return limited
+
+
+def write_daily_summary(cfg, si):
+    if not cfg.get("daily_summary", True):
+        return
+    st = day_state(cfg, si, dt.date.today() - dt.timedelta(days=1))
+    if not st["trades"]:
+        return
+    new = not os.path.exists(SUMMARY_PATH)
+    with open(SUMMARY_PATH, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(["date", "trades", "wins", "losses", "pnl_usd", "consec_losses"])
+        w.writerow([st["date"], st["trades"], st["wins"], st["losses"],
+                    st["pnl"], st["consec_losses"]])
+    out("DAILY SUMMARY written: " + json.dumps(st, ensure_ascii=False))
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="connect, backtest, edge gate; no orders")
     ap.add_argument("--once", action="store_true", help="check current signal once; no orders")
+    ap.add_argument("--status", action="store_true", help="read-only status: day, positions, signal, edge")
     ap.add_argument("--live-demo", action="store_true", help="PLACE DEMO ORDERS (demo account only)")
     args = ap.parse_args()
     cfg = load_cfg()
@@ -228,9 +267,17 @@ def main():
         out("No trading: edge gate failed. Change parameters only after new backtest evidence.")
         mt5.shutdown()
         return
-    if args.once:
+    if args.once or args.status:
         sig = strategy.signal(cs, cfg["strategy"], si.spread * si.point)
-        out("SIGNAL NOW: " + (json.dumps(sig, ensure_ascii=False) if sig else "WAIT / no setup"))
+        st = day_state(cfg, si)
+        positions = mt5.positions_get(symbol=si.name) or []
+        mine = [p for p in positions if p.magic == cfg["magic"]]
+        out("STATUS balance=%.2f spread=%d day=%s signal=%s positions=%d" %
+            (mt5.account_info().balance, si.spread,
+             json.dumps(st, ensure_ascii=False),
+             (sig["side"] if sig else "WAIT"), len(mine)))
+        if args.once:
+            out("SIGNAL NOW: " + (json.dumps(sig, ensure_ascii=False) if sig else "WAIT / no setup"))
         mt5.shutdown()
         return
     if not dry:
@@ -238,23 +285,43 @@ def main():
     last_bar = cs[-1]["t"]
     edge_good = True
     last_edge_check = time.time()
+    last_day = dt.date.today()
     while True:
-        si = mt5.symbol_info(cfg["symbol"]) or si
-        spread_ok = si.spread <= cfg["max_spread_points"]
-        if time.time() - last_edge_check >= 6 * 3600:
-            edge_good = check_edge(cfg, cs, si)
-            last_edge_check = time.time()
-            if not edge_good:
-                out("TRADING PAUSED — edge gate failed on fresh data; existing positions still managed.")
-        cs = candles(cfg["symbol"], cfg["timeframe"], int(cfg["bars_to_fetch"]))
-        manage_positions(cfg, si, cs, dry)
-        if cs[-1]["t"] != last_bar:
-            last_bar = cs[-1]["t"]
-            sig = strategy.signal(cs, cfg["strategy"], si.spread * si.point)
-            if sig and spread_ok and edge_good and not daily_limits(cfg, si):
-                open_position(cfg, si, sig, dry)
-            elif sig:
-                out("SIGNAL skipped (spread/edge/daily limit): " + sig["side"])
+        try:
+            if dt.date.today() != last_day:
+                write_daily_summary(cfg, si)
+                last_day = dt.date.today()
+            si = mt5.symbol_info(cfg["symbol"]) or si
+            spread_ok = si.spread <= cfg["max_spread_points"]
+            cs = candles(cfg["symbol"], cfg["timeframe"], int(cfg["bars_to_fetch"]))
+            atrs = [x for x in strategy.atr(cs) if x]
+            avg_atr = sum(atrs) / len(atrs) if atrs else 0.0
+            ratio_ok = avg_atr > 0 and (si.spread * si.point) / avg_atr <= cfg.get("max_spread_atr_ratio", 0.05)
+            if time.time() - last_edge_check >= 6 * 3600:
+                edge_good = check_edge(cfg, cs, si)
+                last_edge_check = time.time()
+                if not edge_good:
+                    out("TRADING PAUSED — edge gate failed on fresh data; existing positions still managed.")
+            manage_positions(cfg, si, cs, dry)
+            if cs[-1]["t"] != last_bar:
+                last_bar = cs[-1]["t"]
+                sig = strategy.signal(cs, cfg["strategy"], si.spread * si.point)
+                if sig and spread_ok and ratio_ok and edge_good and not daily_limits(cfg, si):
+                    open_position(cfg, si, sig, dry)
+                elif sig:
+                    out("SIGNAL skipped (filter/edge/limit): " + sig["side"])
+        except Exception as exc:
+            out("LOOP ERROR: %s — reconnecting in 10s" % exc)
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+            time.sleep(10)
+            try:
+                acc, si = connect(cfg)
+                out("RECONNECTED")
+            except Exception as exc2:
+                out("RECONNECT FAILED: %s" % exc2)
         time.sleep(int(cfg["poll_seconds"]))
 
 

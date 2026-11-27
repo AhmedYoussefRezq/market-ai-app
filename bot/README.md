@@ -56,17 +56,39 @@ python bot\bot.py --once
 ```bat
 python bot\bot.py
 ```
-مراقبة مستمرة وضع **Dry Run** (افتراضي) — بيطبع الإشارات بس، بيispatchش أوامر. اضغط Ctrl+C للإيقاف.
+مراقبة مستمرة وضع **Dry Run** (افتراضي) — بيطبع الإشارات بس، ومش بيبعت أوامر. اضغط Ctrl+C للإيقاف.
 
 ```bat
 python bot\bot.py --live-demo
 ```
 **ده اللي بيحط أوامر فعلية على الديمو.** البوت بيرفض أي حساب مش ديمو، وبيرفض التداول لو بوابة الجودة فشلت.
 
+## تشغيل 24 ساعة من غير VPS
+جهازك بقى هو «السيرفر»: فيه `bot/watchdog.ps1` + مهمة مجدولة اسمها **MarketAI-Demo-Bot** بتشتغل تلقائياً عند تسجيل الدخول.
+
+- الـ watchdog بيتأكد إن الـ MT5 terminal شغال، ولو البوت وقف أو كراش بيرجّعه لوحده (خلال 30 ثانية تقريباً).
+- إعدادات الطاقة اتظبطت: **مفيش Sleep ولا Hibernate** على الكهرباء والبطارية، فالبوت يفضل شغال.
+- اللوج في `bot/run.log`، وحالة الـ watchdog في `bot/watchdog.log`.
+
+**الحدود (بصراحة):**
+- لو الجهاز اتقفل أو النت قطع، البوت بيقف. لو النت رجع والجهاز شغال، الـ watchdog بيرجّعه.
+- بعد أي Restart لـ Windows لازم تعمل تسجيل دخول مرة واحدة عشان المهمة تشتغل.
+- تحديثات Windows ممكن تعمل Restart لوحدها — ظبّط Active Hours أو أجّل التحديثات.
+- مش محتاج تسيب الشاشة مفتوحة؛ الشاشة ممكن تنطفي.
+
+**إيقاف / إزالة:**
+```powershell
+Stop-ScheduledTask -TaskName "MarketAI-Demo-Bot"
+Unregister-ScheduledTask -TaskName "MarketAI-Demo-Bot" -Confirm:$false
+```
+
+**بديل مدفوع:** MQL5 VPS بـ 15$ شهرياً (10$ لو سنوي) مع تجربة مجانية 24 ساعة — بس بيشغّل Expert Advisors بلغة MQL5، مش Python. المسار ده محتاج تحويل البوت لـ EA الأول.
+
 ## إعدادات (`bot/config.json`)
 - `risk_pct`: 1% من الرصيد في الصفقة.
 - `max_spread_points`: 260.
-- `max_trades_per_day`: 8 · `daily_loss_limit_r`: 3.
+- `max_trades_per_day`: 8 · `daily_loss_limit_r`: 3 · `max_consecutive_losses`: 3.
+- `max_spread_atr_ratio`: 0.05 (السبريد لازم يكون ≤ 5% من متوسط ATR).
 - `break_even_at_r`: 1.0.
 - الوضع الافتراضي **دائماً Dry-run** — مفيش إعداد في الكونفيج بيفعّل الأوامر. `--live-demo` بس هو اللي بيسمح بالتنفيذ.
 

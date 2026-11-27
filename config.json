@@ -1,0 +1,12 @@
+{
+  "mode": "ensemble",
+  "timeout_seconds": 75,
+  "temperature": 0.15,
+  "max_providers": 25,
+  "default_symbol": "XAUUSD",
+  "default_interval": "H1",
+  "auto_analysis_enabled": false,
+  "auto_analysis_minutes": 30,
+  "news_limit": 12,
+  "cache_minutes": 15
+}

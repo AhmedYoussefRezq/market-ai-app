@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+<title>Market AI — صفقة مدروسة بكل النماذج</title>
+</head>
+<body>
+<header>
+  <div class="logo">M</div>
+  <div>
+    <h1>Market AI</h1>
+    <p class="sub">السوق كله · كل مفاتيح AI مع بعض · صفقة مدروسة</p>
+  </div>
+</header>
+
+<div class="card">
+  <div class="row"><span class="k">مفاتيح مفعّلة</span><span class="v" id="keyCount">-</span></div>
+  <div class="row"><span class="k">نمط التحليل</span><span class="v" id="engineMode">ensemble</span></div>
+  <button class="ghost" onclick="toggleSettings()">إعداد مفاتيح AI</button>
+</div>
+
+<div class="card" id="settings" style="display:none">
+  <h2>المزودون المتاحون</h2>
+  <div id="providerList"></div>
+  <h2>إضافة / تعديل مزود</h2>
+  <label>الاسم<input id="pName" placeholder="groq / openrouter / gemini ..."></label>
+  <label>Base URL<input id="pUrl" dir="ltr" placeholder="https://api.groq.com/openai/v1"></label>
+  <label>الموديل<input id="pModel" dir="ltr" placeholder="llama-3.3-70b-versatile"></label>
+  <label>API key (مخفي)<input id="pKey" type="password" dir="ltr" autocomplete="off" placeholder="اتركه فاضي عشان تحافظ على المفتاح الحالي"></label>
+  <button onclick="saveProvider()">حفظ المزود</button>
+  <p class="note">المفتاح بيتخزن محلياً على الكمبيوتر فقط، ومش بيرجع في أي استجابة. متشاركهوش في الشات.</p>
+</div>
+
+<div class="card">
+  <h2>تحليل السوق</h2>
+  <label>الأداة<select id="symbol"></select></label>
+  <label>الفريم<select id="interval">
+    <option>M15</option><option>M30</option><option selected>H1</option><option>H4</option><option>D1</option>
+  </select></label>
+  <button id="runBtn" onclick="analyze()">شغّل التحليل بكل المفاتيح</button>
+  <button class="ghost" onclick="preview()">معاينة بيانات السوق (بدون AI)</button>
+  <p class="note">بيتم سحب الأسعار والمؤشرات والأخبار تلقائياً، وبعدين كل موديل يحلل على حدة، ويتعمل توافق بينهم.</p>
+</div>
+
+<div class="card">
+  <div class="row"><span class="k">تحليل تلقائي</span><span class="v" id="autoState">-</span></div>
+  <button class="ghost" onclick="saveMarket()">احفظ الإعداد للتحليل التلقائي</button>
+  <button class="ghost" id="autoBtn" onclick="toggleAuto()">تشغيل التحليل التلقائي</button>
+</div>
+
+<div id="err" class="err"></div>
+
+<div class="card" id="snapshot" style="display:none">
+  <h2>بيانات السوق</h2>
+  <div id="snapInfo"></div>
+  <h3>المؤشرات</h3><div id="snapInd" class="chips"></div>
+  <h3>السوق الماكرو</h3><div id="snapMacro"></div>
+  <h3>الأخبار</h3><ul id="snapNews"></ul>
+</div>
+
+<div class="card" id="result" style="display:none">
+  <div class="row"><span class="k">الصفقة المقترحة</span><span class="badge" id="bias">-</span></div>
+  <div class="bar"><i id="confBar"></i></div>
+  <div class="row"><span class="k">الثقة</span><span class="v" id="confText">-</span></div>
+  <div class="row"><span class="k">الأداة / الفريم</span><span class="v" id="inst">-</span></div>
+  <div class="row"><span class="k">الدخول</span><span class="v" id="entry">-</span></div>
+  <div class="row"><span class="k">الوقف</span><span class="v" id="sl">-</span></div>
+  <div class="row"><span class="k">الأهداف</span><span class="v" id="tp">-</span></div>
+  <div class="row"><span class="k">العائد/المخاطرة</span><span class="v" id="rr">-</span></div>
+  <div class="row"><span class="k">الإلغاء</span><span class="v" id="inv">-</span></div>
+  <div class="row"><span class="k">شروط الدخول</span><span class="v" id="wait">-</span></div>
+  <div class="row"><span class="k">التوافق</span><span class="v" id="agree">-</span></div>
+  <p id="thesis"></p>
+  <b class="k">العوامل:</b><ul id="factors"></ul>
+  <div class="row"><span class="k">الأخبار</span><span class="v" id="newsImpact">-</span></div>
+  <div class="row"><span class="k">تحذير</span><span class="v" id="risk">-</span></div>
+  <h3>قراءة كل موديل</h3><div id="providersResult"></div>
+  <h3>بيانات السوق المستخدمة</h3><div id="resultMarket"></div>
+  <p class="note" id="stamp"></p>
+</div>
+
+<script>
+const TOKEN = "__TOKEN__";
+const H = {"X-Token": TOKEN, "Content-Type": "application/json"};
+let busy = false, autoOn = false, cfg = null;
+
+function esc(s){
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+async function api(path, options={}){
+  const r = await fetch(path, Object.assign({headers:H}, options));
+  return await r.json();
+}
+function fmt(v){ return (v === null || v === undefined) ? '-' : String(v); }
+
+async function status(){
+  try{
+    const s = await api('/api/status');
+    busy = !!s.busy;
+    const btn = document.getElementById('runBtn');
+    btn.disabled = busy;
+    btn.textContent = busy ? 'جاري التحليل...' : 'شغّل التحليل بكل المفاتيح';
+    document.getElementById('keyCount').textContent = s.providers_with_keys ?? 0;
+    autoOn = !!(s.auto && s.auto.enabled);
+    document.getElementById('autoState').textContent = autoOn
+      ? `مفعل · كل ${s.auto.interval_minutes} د · التالي بعد ${s.auto.next_run_in}s`
+      : 'متوقف';
+    document.getElementById('autoBtn').textContent = autoOn ? 'إيقاف التحليل التلقائي' : 'تشغيل التحليل التلقائي';
+    if(s.error) document.getElementById('err').textContent = s.error;
+  }catch(e){ document.getElementById('err').textContent = 'تعذر الاتصال بالخادم'; }
+}
+async function loadConfig(){
+  cfg = await api('/api/config');
+  document.getElementById('engineMode').textContent = cfg.mode;
+  const sel = document.getElementById('symbol');
+  if(!sel.options.length){
+    sel.innerHTML = (cfg.symbols||[]).map(s =>
+      `<option value="${esc(s.id)}">${esc(s.label)} (${esc(s.kind)})</option>`).join('');
+    sel.value = cfg.default_symbol || 'XAUUSD';
+  }
+  renderProviders(cfg.providers||[]);
+}
+function renderProviders(list){
+  const box = document.getElementById('providerList');
+  if(!list.length){ box.innerHTML = '<p class="note">مفيش مزودين.</p>'; return; }
+  box.innerHTML = list.map(p => `
+    <div class="provider">
+      <b>${esc(p.name)}</b> <span class="tiny">${esc(p.model)}</span>
+      <div class="tiny">${p.has_key ? 'المفتاح محفوظ' : 'مفيش مفتاح'} · ${p.enabled ? 'مفعّل' : 'متوقف'}</div>
+      <div class="row"><button class="mini" onclick="toggleProvider('${esc(p.name)}')">${p.enabled ? 'إيقاف' : 'تفعيل'}</button>
+      <button class="mini danger" onclick="removeProvider('${esc(p.name)}')">حذف</button></div>
+    </div>`).join('');
+}
+function toggleSettings(){
+  const el = document.getElementById('settings');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+async function saveProvider(){
+  const body = {action:'add', name:document.getElementById('pName').value.trim(),
+    base_url:document.getElementById('pUrl').value.trim(),
+    model:document.getElementById('pModel').value.trim(),
+    api_key:document.getElementById('pKey').value.trim(), enabled:true};
+  const d = await api('/api/providers',{method:'POST',body:JSON.stringify(body)});
+  if(d.error){ document.getElementById('err').textContent=d.error; return; }
+  document.getElementById('pKey').value='';
+  await loadConfig(); await status();
+}
+async function toggleProvider(name){
+  await api('/api/providers',{method:'POST',body:JSON.stringify({action:'toggle',name})});
+  await loadConfig(); await status();
+}
+async function removeProvider(name){
+  if(!confirm('حذف المزود ' + name + '؟')) return;
+  await api('/api/providers',{method:'POST',body:JSON.stringify({action:'remove',name})});
+  await loadConfig(); await status();
+}
+function marketBody(){
+  return {symbol:document.getElementById('symbol').value,
+          interval:document.getElementById('interval').value};
+}
+async function saveMarket(){
+  const d = await api('/api/market',{method:'POST',body:JSON.stringify(marketBody())});
+  document.getElementById('err').textContent = d.ok ? 'اتحفظ الإعداد.' : (d.error||'');
+}
+async function toggleAuto(){
+  await api('/api/auto',{method:'POST',body:JSON.stringify({enabled:!autoOn})});
+  await status();
+}
+async function analyze(){
+  if(busy) return;
+  document.getElementById('err').textContent='';
+  const d = await api('/api/analyze',{method:'POST',body:JSON.stringify(marketBody())});
+  if(d.error){ document.getElementById('err').textContent=d.error; return; }
+  poll();
+}
+function poll(){
+  const id = setInterval(async()=>{
+    await status();
+    if(!busy){ clearInterval(id); await showResult(); }
+  },2500);
+  setTimeout(()=>clearInterval(id),240000);
+}
+function renderIndicators(ind){
+  const labels = {last:'السعر',change_pct:'تغير %',ema20:'EMA20',ema50:'EMA50',rsi14:'RSI14',
+    macd:'MACD',macd_hist:'MACD hist',atr14:'ATR14',atr_pct:'ATR %',bb_upper:'BB upper',
+    bb_lower:'BB lower',stoch_k:'Stoch',high20:'قمة 20',low20:'قاع 20',trend:'الاتجاه'};
+  return Object.entries(labels).filter(([k])=>ind[k]!==undefined && ind[k]!==null)
+    .map(([k,l])=>`<span class="chip">${esc(l)}: <b>${esc(ind[k])}</b></span>`).join('');
+}
+function renderMarket(m){
+  if(!m) return '';
+  const ind = m.indicators||{};
+  return `<p class="tiny">${esc(m.label||m.symbol)} · ${esc(m.interval)} · ${esc(m.generated_at)}</p>
+    <div class="chips">${renderIndicators(ind)}</div>
+    <h3>السوق الماكرو</h3>
+    <div class="chips">${(m.macro||[]).map(x=>`<span class="chip">${esc(x.label||x.symbol)}: <b>${fmt(x.price)}</b> (${fmt(x.change_pct)}%)</span>`).join('')}</div>
+    <h3>الأخبار</h3>
+    <ul>${(m.news||[]).slice(0,8).map(n=>`<li><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a></li>`).join('')}</ul>
+    ${(m.warnings||[]).length?`<p class="note">${esc(m.warnings.join(' · '))}</p>`:''}`;
+}
+async function preview(){
+  document.getElementById('err').textContent='';
+  const s = await api('/api/snapshot?' + new URLSearchParams(marketBody()));
+  if(s.error){ document.getElementById('err').textContent=s.error; return; }
+  document.getElementById('snapshot').style.display='block';
+  document.getElementById('snapInfo').innerHTML = `<p class="tiny">${esc(s.label)} · ${esc(s.interval)} · ${esc(s.generated_at)} · ${(s.recent_candles||[]).length} شمعة</p>`;
+  document.getElementById('snapInd').innerHTML = renderIndicators(s.indicators||{});
+  document.getElementById('snapMacro').innerHTML = '<div class="chips">'+(s.macro||[]).map(x=>`<span class="chip">${esc(x.label||x.symbol)}: <b>${fmt(x.price)}</b> (${fmt(x.change_pct)}%)</span>`).join('')+'</div>';
+  document.getElementById('snapNews').innerHTML = (s.news||[]).map(n=>`<li><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a></li>`).join('');
+}
+async function showResult(){
+  const r = await api('/api/result');
+  if(!r || (!r.bias && !r.error)) return;
+  document.getElementById('result').style.display='block';
+  if(r.error){ document.getElementById('err').textContent=r.error; return; }
+  const badge=document.getElementById('bias');
+  badge.textContent=r.bias;
+  badge.className='badge '+(r.bias==='BUY'?'buy':r.bias==='SELL'?'sell':'wait');
+  const c=Number(r.confidence||0);
+  document.getElementById('confBar').style.width=c+'%';
+  document.getElementById('confText').textContent=c+'%';
+  document.getElementById('inst').textContent=`${r.symbol||'-'} / ${r.interval||'-'}`;
+  document.getElementById('entry').textContent=(r.entry_zone||[]).map(fmt).join(' - ');
+  document.getElementById('sl').textContent=fmt(r.stop_loss);
+  document.getElementById('tp').textContent=(r.take_profit||[]).map(fmt).join(' / ')||'-';
+  document.getElementById('rr').textContent=fmt(r.risk_reward);
+  document.getElementById('inv').textContent=r.invalidation||'-';
+  document.getElementById('wait').textContent=r.wait_conditions||'-';
+  const con=r.consensus||{};
+  document.getElementById('agree').textContent=`${con.providers_ok||0}/${con.providers_total||0} · توافق ${Math.round((con.agreement||0)*100)}%`;
+  document.getElementById('thesis').textContent=r.thesis||'';
+  document.getElementById('factors').innerHTML=(r.key_factors||[]).map(x=>`<li>${esc(x)}</li>`).join('');
+  document.getElementById('newsImpact').textContent=r.news_impact||'-';
+  document.getElementById('risk').textContent=r.risk_note||'-';
+  document.getElementById('providersResult').innerHTML=(r.providers||[]).map(p=>`
+    <div class="provider"><b>${esc(p.name)}</b> <span class="tiny">${esc(p.model)}</span>
+    <div class="tiny">${esc(p.bias)} · ${fmt(p.confidence)}% · ${p.latency_ms||0}ms ${p.ok?'':'· فشل'}</div>
+    ${p.error?`<div class="tiny err">${esc(p.error)}</div>`:''}</div>`).join('');
+  document.getElementById('resultMarket').innerHTML=renderMarket(r.market);
+  document.getElementById('stamp').textContent=(r.generated_at||'')+' — '+(r.execution||'');
+}
+status(); loadConfig(); showResult();
+setInterval(status,8000);
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').catch(()=>{}); }
+</script>
+</body>
+</html>

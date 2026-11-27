@@ -1,0 +1,5 @@
+keys.local.json
+web_token.txt
+market.json
+__pycache__/
+*.pyc

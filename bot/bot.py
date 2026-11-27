@@ -210,7 +210,8 @@ def main():
     ap.add_argument("--live-demo", action="store_true", help="PLACE DEMO ORDERS (demo account only)")
     args = ap.parse_args()
     cfg = load_cfg()
-    dry = not args.live_demo or bool(cfg.get("dry_run", True))
+    # Plain runs and --check/--once NEVER send orders. Only --live-demo does.
+    dry = not args.live_demo
     acc, si = connect(cfg)
     cs = candles(cfg["symbol"], cfg["timeframe"], int(cfg["bars_to_fetch"]))
     out("DATA %d bars, spread=%d points (%.3f)" % (len(cs), si.spread, si.spread * si.point))

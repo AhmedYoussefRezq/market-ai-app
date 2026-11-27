@@ -22,6 +22,5 @@
   "min_pf": 1.15,
   "min_trades": 100,
   "max_dd": 10.0,
-  "dry_run": true,
   "magic": 20261127
 }

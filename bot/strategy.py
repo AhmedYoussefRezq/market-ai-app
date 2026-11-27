@@ -5,9 +5,10 @@ Pure Python, no MT5 dependency. Works on any OHLC list:
     [{'t': ts, 'o': open, 'h': high, 'l': low, 'c': close}, ...]
 """
 DEFAULTS = {
+    "mode": "pullback",  # "pullback" (M15, tested) or "momentum" (fast M1, tested as negative)
     "fast": 20,        # trend EMA
     "slow": 50,        # trend EMA
-    "pull": 9,         # pullback EMA
+    "pull": 9,         # pullback EMA / fast momentum EMA
     "rsi": 14,
     "atr": 14,
     "sl_atr": 1.2,
@@ -70,10 +71,28 @@ def _series(candles, cfg):
         "fast": ema(closes, cfg["fast"]),
         "slow": ema(closes, cfg["slow"]),
         "pull": ema(closes, cfg["pull"]),
+        "mom_fast": ema(closes, 9),
+        "mom_slow": ema(closes, 21),
         "rsi": rsi(closes, cfg["rsi"]),
         "atr": atr(candles, cfg["atr"]),
         "closes": closes,
     }
+
+
+def _setup(s, i, cfg):
+    """Return (long_ok, short_ok, label) for the configured entry mode."""
+    r = s["rsi"][i]
+    prev_r = s["rsi"][i - 1]
+    if r is None or prev_r is None:
+        return False, False, "warmup"
+    if cfg.get("mode") == "momentum":
+        mf, ms = s["mom_fast"], s["mom_slow"]
+        long_ok = mf[i - 1] <= ms[i - 1] and mf[i] > ms[i] and r > 55
+        short_ok = mf[i - 1] >= ms[i - 1] and mf[i] < ms[i] and r < 45
+        return long_ok, short_ok, "momentum"
+    long_ok = prev_r <= 45 < r and s["closes"][i] <= s["pull"][i] * 1.002 and s["fast"][i] > s["slow"][i]
+    short_ok = prev_r >= 55 > r and s["closes"][i] >= s["pull"][i] * 0.998 and s["fast"][i] < s["slow"][i]
+    return long_ok, short_ok, "pullback"
 
 
 def signal(candles, cfg=None, spread_cost=0.0):
@@ -86,15 +105,7 @@ def signal(candles, cfg=None, spread_cost=0.0):
     r, a = s["rsi"][i], s["atr"][i]
     if r is None or not a:
         return None
-    prev_r = s["rsi"][i - 1]
-    if prev_r is None:
-        return None
-    long_cross = prev_r <= 45 < r
-    short_cross = prev_r >= 55 > r
-    up = s["fast"][i] > s["slow"][i]
-    dn = s["fast"][i] < s["slow"][i]
-    long_ok = long_cross and s["closes"][i] <= s["pull"][i] * 1.002 and up
-    short_ok = short_cross and s["closes"][i] >= s["pull"][i] * 0.998 and dn
+    long_ok, short_ok, mode_label = _setup(s, i, cfg)
     if not long_ok and not short_ok:
         return None
     side = "BUY" if long_ok else "SELL"
@@ -106,10 +117,12 @@ def signal(candles, cfg=None, spread_cost=0.0):
         "side": side, "price": round(price, 6),
         "sl": round(sl, 6), "tp": round(tp, 6), "risk": round(risk, 6),
         "rsi": round(r, 1), "atr": round(a, 6), "spread_cost": spread_cost,
+        "mode": mode_label,
         "reasons": [
-            "RSI14 %.1f %s 45/55" % (r, "crossed above" if long_ok else "crossed below"),
-            "EMA%d %s EMA%d" % (cfg["fast"], ">" if long_ok else "<", cfg["slow"]),
-            "price near EMA%d pullback" % cfg["pull"],
+            "mode=%s · RSI14 %.1f" % (mode_label, r),
+            ("EMA9 crossed %s EMA21" % ("above" if long_ok else "below")) if mode_label == "momentum"
+            else "EMA%d %s EMA%d" % (cfg["fast"], ">" if long_ok else "<", cfg["slow"]),
+            ("fast momentum" if mode_label == "momentum" else "price near EMA%d pullback" % cfg["pull"]),
         ],
     }
 
@@ -141,10 +154,9 @@ def backtest(candles, cfg=None, spread_cost=0.0):
                                "bars": i - pos["i"], "t": bar["t"]})
                 pos = None
         if not pos and s["rsi"][i] is not None and s["rsi"][i - 1] is not None and s["atr"][i]:
-            prev_r, r, a = s["rsi"][i - 1], s["rsi"][i], s["atr"][i]
+            a = s["atr"][i]
             next_bar = candles[i + 1]
-            long_ok = prev_r <= 45 < r and s["closes"][i] <= s["pull"][i] * 1.002 and s["fast"][i] > s["slow"][i]
-            short_ok = prev_r >= 55 > r and s["closes"][i] >= s["pull"][i] * 0.998 and s["fast"][i] < s["slow"][i]
+            long_ok, short_ok, _ = _setup(s, i, cfg)
             if long_ok or short_ok:
                 side = "BUY" if long_ok else "SELL"
                 entry = next_bar["o"] + (spread_cost if long_ok else -spread_cost)

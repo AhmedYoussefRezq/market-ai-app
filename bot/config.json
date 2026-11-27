@@ -2,8 +2,9 @@
   "symbol": "XAUUSDm",
   "timeframe": "M15",
   "bars_to_fetch": 6000,
-  "poll_seconds": 15,
+  "poll_seconds": 5,
   "strategy": {
+    "mode": "pullback",
     "fast": 20,
     "slow": 50,
     "pull": 9,

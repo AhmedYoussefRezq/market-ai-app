@@ -236,16 +236,25 @@ def main():
     if not dry:
         out("LIVE DEMO MODE — orders will be placed on the demo account")
     last_bar = cs[-1]["t"]
+    edge_good = True
+    last_edge_check = time.time()
     while True:
+        si = mt5.symbol_info(cfg["symbol"]) or si
+        spread_ok = si.spread <= cfg["max_spread_points"]
+        if time.time() - last_edge_check >= 6 * 3600:
+            edge_good = check_edge(cfg, cs, si)
+            last_edge_check = time.time()
+            if not edge_good:
+                out("TRADING PAUSED — edge gate failed on fresh data; existing positions still managed.")
         cs = candles(cfg["symbol"], cfg["timeframe"], int(cfg["bars_to_fetch"]))
         manage_positions(cfg, si, cs, dry)
         if cs[-1]["t"] != last_bar:
             last_bar = cs[-1]["t"]
             sig = strategy.signal(cs, cfg["strategy"], si.spread * si.point)
-            if sig and spread_ok and not daily_limits(cfg, si):
+            if sig and spread_ok and edge_good and not daily_limits(cfg, si):
                 open_position(cfg, si, sig, dry)
             elif sig:
-                out("SIGNAL skipped (spread/daily limit): " + sig["side"])
+                out("SIGNAL skipped (spread/edge/daily limit): " + sig["side"])
         time.sleep(int(cfg["poll_seconds"]))
 
 
